@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<TargetFramework>netstandard2.1</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<LangVersion>latest</LangVersion>
+		<PackageProjectUrl>http://loxifi.com/Projects/Loxifi.FastIO</PackageProjectUrl>
+		<Version>0.1.0</Version>
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
+		<PackageIcon>Properties\Icon.png</PackageIcon>
+		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+		<Description>
+			A specific use case attempt at optimizing IO operations. Multithreaded file/directory enumeration and low over head file opens
+		</Description>
+		<PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
+		<PackageLicenseFile>Properties\License.txt</PackageLicenseFile>
+		<IncludeSymbols>true</IncludeSymbols>
+		<SymbolPackageFormat>snupkg</SymbolPackageFormat>
+		<PackageReadmeFile>README.md</PackageReadmeFile>
+		<RepositoryUrl>https://github.com/Loxifi/Loxifi.FastIO.git</RepositoryUrl>
+		<RepositoryType>git</RepositoryType>
+	</PropertyGroup>
+	<ItemGroup>
+	  <Compile Remove="Tests\**" />
+	  <EmbeddedResource Remove="Tests\**" />
+	  <None Remove="Tests\**" />
+	</ItemGroup>
+	<ItemGroup>
+		<None Include="Properties\License.txt" Pack="true" PackagePath="Properties\License.txt" />
+		<None Include="Properties\Icon.png" Pack="true" PackagePath="Properties\Icon.png" />
+		<None Include="README.md" Pack="true" PackagePath="README.md" />
+	</ItemGroup>
+</Project>
