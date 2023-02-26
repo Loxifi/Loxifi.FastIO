@@ -22,7 +22,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\Loxifi.FastIO.csproj" />
+    <ProjectReference Include="..\Loxifi.FastIO.csproj" />
   </ItemGroup>
 
 </Project>

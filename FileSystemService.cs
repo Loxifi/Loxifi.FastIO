@@ -93,6 +93,27 @@ namespace Loxifi.FastIO
 		}
 
 		/// <summary>
+		/// Opens a <see cref="FileStream"/> for access at the given path. Ensure stream is correctly disposed.
+		/// </summary>
+		public static FileStream Open(string path, FileAccess fileAccess, FileMode fileOption = FileMode.Open, FileShare shareMode = FileShare.Read, int buffer = 0)
+		{
+			if (path.Length < 260 || path.StartsWith("\\\\?\\"))
+			{
+				path = $"\\\\?\\{path}";
+			}
+
+			SafeFileHandle fileHandle = NativeIO.CreateFileW(path, fileAccess, shareMode, IntPtr.Zero, fileOption, 0, IntPtr.Zero);
+
+			int win32Error = Marshal.GetLastWin32Error();
+			if (fileHandle.IsInvalid)
+			{
+				NativeExceptionMapping(path, win32Error); // Throws an exception
+			}
+
+			return buffer > 0 ? new FileStream(fileHandle, fileAccess, buffer) : new FileStream(fileHandle, fileAccess);
+		}
+
+		/// <summary>
 		/// Converts an unc path to a share regular path
 		/// </summary>
 		/// <param name="uncSharePath">Unc Path</param>

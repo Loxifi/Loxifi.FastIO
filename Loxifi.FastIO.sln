@@ -5,7 +5,7 @@ VisualStudioVersion = 17.4.33213.308
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Loxifi.FastIO", "Loxifi.FastIO.csproj", "{5D5C52C1-605C-4C71-AD21-AFDF37806A6F}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Loxifi.FastIO.Tests", "Tests\Loxifi.FastIO.Tests\Loxifi.FastIO.Tests.csproj", "{87AD17FC-18B8-4F9F-8B8D-673DDD2B6FF0}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Loxifi.FastIO.Tests", "Tests\Loxifi.FastIO.Tests.csproj", "{87AD17FC-18B8-4F9F-8B8D-673DDD2B6FF0}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
