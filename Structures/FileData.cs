@@ -66,12 +66,12 @@ namespace Loxifi.FastIO.Structures
 		{
 			get
 			{
-				if (FullName.Length < 260 || FullName.StartsWith("\\\\?\\"))
+				if (FullName.Length < 260 || FullName.StartsWith(@"\\"))
 				{
 					return FullName;
 				}
 
-				return $"\\\\?\\{FullName}";
+				return $@"\\?\{FullName}";
 			}
 		}
 
@@ -106,7 +106,7 @@ namespace Loxifi.FastIO.Structures
 		/// </summary>
 		/// <param name="directoryData"></param>
 		/// <returns></returns>
-		public bool ChildOf(DirectoryData directoryData) => DirectoryName.StartsWith(directoryData.FullName + "\\") || directoryData.FullName == DirectoryName;
+		public bool ChildOf(DirectoryData directoryData) => DirectoryName.StartsWith(directoryData.FullName + Path.DirectorySeparatorChar) || directoryData.FullName == DirectoryName;
 
 		/// <summary>
 		///

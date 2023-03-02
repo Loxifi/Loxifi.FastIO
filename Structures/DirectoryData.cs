@@ -19,6 +19,11 @@ namespace Loxifi.FastIO.Structures
 		/// <param name="v"></param>
 		public DirectoryData(string v)
 		{
+			if (v[^1] == Path.DirectorySeparatorChar)
+			{
+				FullName = v[..^1];
+			}
+
 			FullName = v;
 		}
 
@@ -80,6 +85,13 @@ namespace Loxifi.FastIO.Structures
 
 			return FullName == mys.FullName;
 		}
+
+		/// <summary>
+		/// True if this file is a child (recursive) of the provided directory
+		/// </summary>
+		/// <param name="directoryData"></param>
+		/// <returns></returns>
+		public bool ChildOf(DirectoryData directoryData) => FullName.StartsWith(directoryData.FullName + Path.DirectorySeparatorChar);
 
 		/// <summary>
 		///

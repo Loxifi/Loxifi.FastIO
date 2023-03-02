@@ -97,9 +97,11 @@ namespace Loxifi.FastIO
 		/// </summary>
 		public static FileStream Open(string path, FileAccess fileAccess, FileMode fileOption = FileMode.Open, FileShare shareMode = FileShare.Read, int buffer = 0)
 		{
-			if (path.Length < 260 || path.StartsWith("\\\\?\\"))
+			if (path.Length >= 260 && !path.StartsWith(@"\\"))
 			{
-				path = $"\\\\?\\{path}";
+
+				path = @$"\\?\{path}";
+
 			}
 
 			SafeFileHandle fileHandle = NativeIO.CreateFileW(path, fileAccess, shareMode, IntPtr.Zero, fileOption, 0, IntPtr.Zero);
@@ -170,7 +172,7 @@ namespace Loxifi.FastIO
 							onDirectory?.Invoke(new DirectoryData(Path.Combine(path, fd.cFileName)));
 						}
 						// Otherwise, if this is a file ("archive"), increment the file count.
-						else if ((fd.dwFileAttributes & FileAttributes.Archive) != 0)
+						else if (IsFile(fd))
 						{
 							yield return new(
 									fd.dwFileAttributes,

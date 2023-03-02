@@ -7,6 +7,7 @@ namespace Loxifi.FastIO.Tests
 	[TestClass]
 	public class FastFileTests
 	{
+
 		[TestMethod]
 		public void TestC()
 		{
