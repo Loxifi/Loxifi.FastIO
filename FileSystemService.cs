@@ -13,6 +13,8 @@ namespace Loxifi.FastIO
 	/// </summary>
 	public static class FileSystemService
 	{
+		//TODO: Async methods should be joined with sync
+
 		private const string REGULAR_SHARE_PATH_PREFIX = @"\\";
 
 		private const string UNC_LOCAL_PATH_PREFIX = @"\\?\";
@@ -77,6 +79,43 @@ namespace Loxifi.FastIO
 		}
 
 		/// <summary>
+		/// Executes a multithreaded enumeration and invokes the provided actions when a file or directory is discovered
+		/// </summary>
+		/// <param name="directoryData"></param>
+		/// <param name="onFile"></param>
+		/// <param name="recursive"></param>
+		/// <param name="onDirectory"></param>
+		public static async Task EnumerateFilesAsync(DirectoryData directoryData, Func<FileData, Task> onFile, bool recursive = false, Func<DirectoryData, Task>? onDirectory = null)
+		{
+			List<DirectoryData> directoryDatas = new();
+
+			async Task FoundDir(DirectoryData dd)
+			{
+				if (recursive)
+				{
+					directoryDatas.Add(dd);
+				}
+
+				if (onDirectory is not null)
+				{
+					await onDirectory.Invoke(dd);
+				}
+			}
+
+			await foreach (FileData fileData in EnumerateAsync(directoryData, FoundDir))
+			{
+				await onFile.Invoke(fileData);
+			}
+
+			if (!recursive)
+			{
+				return;
+			}
+
+			_ = Parallel.ForEach(directoryDatas, async dd => await EnumerateFilesAsync(dd, onFile, recursive, onDirectory));
+		}
+
+		/// <summary>
 		/// Opens a <see cref="FileStream"/> for access at the given path. Ensure stream is correctly disposed.
 		/// </summary>
 		public static FileStream Open(FileData fileData, FileAccess fileAccess, FileMode fileOption = FileMode.Open, FileShare shareMode = FileShare.Read, int buffer = 0)
@@ -129,6 +168,69 @@ namespace Loxifi.FastIO
 			if (string.IsNullOrWhiteSpace(data.FullName))
 			{
 				throw new ArgumentNullException("path", "The provided path is NULL or empty.");
+			}
+		}
+
+		private static async IAsyncEnumerable<FileData> EnumerateAsync(DirectoryData directory, Func<DirectoryData, Task>? onDirectory = null)
+		{
+			string path = directory.FullName;
+
+			if (string.IsNullOrWhiteSpace(path))
+			{
+				throw new ArgumentNullException("path", "The provided path is NULL or empty.");
+			}
+
+			// If the provided path doesn't end in a backslash, append one.
+			if (path.Last() != '\\')
+			{
+				path += '\\';
+			}
+
+			IntPtr hFile = IntPtr.Zero;
+
+			try
+			{
+				hFile = NativeIO.FindFirstFileW(path + "*", out WIN32_FIND_DATA fd);
+
+				// If we encounter an error, or there are no files/directories, we return no entries.
+				if (hFile.ToInt64() == -1)
+				{
+					yield break;
+				}
+
+				do
+				{
+					if (fd.cFileName is not ("." or ".."))
+					{
+						// If a directory (and not a Reparse Point), and the name is not "." or ".." which exist as concepts in the file system,
+						// count the directory and add it to a list so we can iterate over it in parallel later on to maximize performance.
+						if (IsRealDirectory(fd))
+						{
+							if (onDirectory != null)
+							{
+								await onDirectory.Invoke(new DirectoryData(Path.Combine(path, fd.cFileName)));
+							}
+						}
+						// Otherwise, if this is a file ("archive"), increment the file count.
+						else if (IsFile(fd))
+						{
+							yield return new(
+									fd.dwFileAttributes,
+									Path.Combine(path, fd.cFileName),
+									DateTime.FromFileTimeUtc((fd.ftLastWriteTime.dwHighDateTime << 32) | (fd.ftLastWriteTime.dwLowDateTime & 0xFFFFFFFF)),
+									(fd.nFileSizeHigh << 32) | fd.nFileSizeLow
+								);
+						}
+					}
+				}
+				while (NativeIO.FindNextFileW(hFile, out fd));
+			}
+			finally
+			{
+				if (hFile.ToInt64() != 0)
+				{
+					_ = NativeIO.FindClose(hFile);
+				}
 			}
 		}
 

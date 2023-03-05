@@ -43,21 +43,21 @@ namespace Loxifi.FastIO.Structures
 				throw new ArgumentException($"'{nameof(fullName)}' cannot be null or whitespace.", nameof(fullName));
 			}
 
-			FullName = fullName;
-			Attributes = attributes;
-			LastWriteTime = lastWriteTime;
-			Length = length;
+			this.FullName = fullName;
+			this.Attributes = attributes;
+			this.LastWriteTime = lastWriteTime;
+			this.Length = length;
 		}
 
 		/// <summary>
 		/// Gets a struct representing the parent directory
 		/// </summary>
-		public DirectoryData Directory => new(DirectoryName);
+		public DirectoryData Directory => new(this.DirectoryName);
 
 		/// <summary>
 		/// String path of the folder containing this file
 		/// </summary>
-		public string DirectoryName => FullName[..FullName.LastIndexOf('\\')];
+		public string DirectoryName => this.FullName[..this.FullName.LastIndexOf('\\')];
 
 		/// <summary>
 		/// FullName property in a format compatible with lengths > 260 characters
@@ -66,24 +66,24 @@ namespace Loxifi.FastIO.Structures
 		{
 			get
 			{
-				if (FullName.Length < 260 || FullName.StartsWith(@"\\"))
+				if (this.FullName.Length < 260 || this.FullName.StartsWith(@"\\"))
 				{
-					return FullName;
+					return this.FullName;
 				}
 
-				return $@"\\?\{FullName}";
+				return $@"\\?\{this.FullName}";
 			}
 		}
 
 		/// <summary>
 		/// True if this struct has been populated
 		/// </summary>
-		public bool HasValue => !string.IsNullOrWhiteSpace(FullName);
+		public bool HasValue => !string.IsNullOrWhiteSpace(this.FullName);
 
 		/// <summary>
 		/// Debugger only
 		/// </summary>
-		private string DebuggerDisplay => FullName;
+		private string DebuggerDisplay => this.FullName;
 
 		/// <summary>
 		///
@@ -106,7 +106,7 @@ namespace Loxifi.FastIO.Structures
 		/// </summary>
 		/// <param name="directoryData"></param>
 		/// <returns></returns>
-		public bool ChildOf(DirectoryData directoryData) => DirectoryName.StartsWith(directoryData.FullName + Path.DirectorySeparatorChar) || directoryData.FullName == DirectoryName;
+		public bool ChildOf(DirectoryData directoryData) => this.DirectoryName.StartsWith(directoryData.FullName + Path.DirectorySeparatorChar) || directoryData.FullName == this.DirectoryName;
 
 		/// <summary>
 		///
@@ -120,13 +120,13 @@ namespace Loxifi.FastIO.Structures
 				return false;
 			}
 
-			return FullName == mys.FullName;
+			return this.FullName == mys.FullName;
 		}
 
 		/// <summary>
 		///
 		/// </summary>
 		/// <returns></returns>
-		public override int GetHashCode() => FullName.GetHashCode();
+		public override int GetHashCode() => this.FullName.GetHashCode();
 	}
 }

@@ -21,21 +21,21 @@ namespace Loxifi.FastIO.Structures
 		{
 			if (v[^1] == Path.DirectorySeparatorChar)
 			{
-				FullName = v[..^1];
+				this.FullName = v[..^1];
 			}
 
-			FullName = v;
+			this.FullName = v;
 		}
 
 		/// <summary>
 		/// The full name of the parent directory
 		/// </summary>
-		public string DirectoryName => FullName[..FullName.LastIndexOf('\\')];
+		public string DirectoryName => this.FullName[..this.FullName.LastIndexOf('\\')];
 
 		/// <summary>
 		///  True if the directory data was populated
 		/// </summary>
-		public bool HasValue => !string.IsNullOrEmpty(FullName);
+		public bool HasValue => !string.IsNullOrEmpty(this.FullName);
 
 		/// <summary>
 		///
@@ -44,16 +44,16 @@ namespace Loxifi.FastIO.Structures
 		{
 			get
 			{
-				if (FullName.TrimStart('\\').IndexOf('\\') > -1)
+				if (this.FullName.TrimStart('\\').IndexOf('\\') > -1)
 				{
-					return new DirectoryData(DirectoryName);
+					return new DirectoryData(this.DirectoryName);
 				}
 
 				return default;
 			}
 		}
 
-		private string DebuggerDisplay => FullName;
+		private string DebuggerDisplay => this.FullName;
 
 		/// <summary>
 		///
@@ -83,7 +83,7 @@ namespace Loxifi.FastIO.Structures
 				return false;
 			}
 
-			return FullName == mys.FullName;
+			return this.FullName == mys.FullName;
 		}
 
 		/// <summary>
@@ -91,12 +91,12 @@ namespace Loxifi.FastIO.Structures
 		/// </summary>
 		/// <param name="directoryData"></param>
 		/// <returns></returns>
-		public bool ChildOf(DirectoryData directoryData) => FullName.StartsWith(directoryData.FullName + Path.DirectorySeparatorChar);
+		public bool ChildOf(DirectoryData directoryData) => this.FullName.StartsWith(directoryData.FullName + Path.DirectorySeparatorChar);
 
 		/// <summary>
 		///
 		/// </summary>
 		/// <returns></returns>
-		public override int GetHashCode() => FullName.GetHashCode();
+		public override int GetHashCode() => this.FullName.GetHashCode();
 	}
 }
