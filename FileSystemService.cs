@@ -211,7 +211,6 @@ namespace Loxifi.FastIO
 								await onDirectory.Invoke(new DirectoryData(Path.Combine(path, fd.cFileName)));
 							}
 						}
-						// Otherwise, if this is a file ("archive"), increment the file count.
 						else if (IsFile(fd))
 						{
 							yield return new(
@@ -362,7 +361,7 @@ namespace Loxifi.FastIO
 		}
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		private static bool IsFile(WIN32_FIND_DATA fd) => (fd.dwFileAttributes & FileAttributes.Archive) != 0;
+		private static bool IsFile(WIN32_FIND_DATA fd) => (fd.dwFileAttributes & FileAttributes.Directory) == 0 && (fd.dwFileAttributes & FileAttributes.ReparsePoint) == 0;
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
 		private static bool IsRealDirectory(WIN32_FIND_DATA fd) => (fd.dwFileAttributes & FileAttributes.Directory) != 0 && (fd.dwFileAttributes & FileAttributes.ReparsePoint) == 0;
