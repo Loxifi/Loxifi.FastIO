@@ -120,7 +120,7 @@ namespace Loxifi.FastIO
 		/// </summary>
 		public static FileStream Open(FileData fileData, FileAccess fileAccess, FileMode fileOption = FileMode.Open, FileShare shareMode = FileShare.Read, int buffer = 0)
 		{
-			SafeFileHandle fileHandle = NativeIO.CreateFileW(fileData.FullNameLong, fileAccess, shareMode, IntPtr.Zero, fileOption, 0, IntPtr.Zero);
+			SafeFileHandle fileHandle = NativeIO.CreateFileW(GetLongSafePath(fileData.FullName), fileAccess, shareMode, IntPtr.Zero, fileOption, 0, IntPtr.Zero);
 
 			int win32Error = Marshal.GetLastWin32Error();
 			if (fileHandle.IsInvalid)
@@ -136,12 +136,7 @@ namespace Loxifi.FastIO
 		/// </summary>
 		public static FileStream Open(string path, FileAccess fileAccess, FileMode fileOption = FileMode.Open, FileShare shareMode = FileShare.Read, int buffer = 0)
 		{
-			if (path.Length >= 260 && !path.StartsWith(@"\\"))
-			{
-
-				path = @$"\\?\{path}";
-
-			}
+			path = GetLongSafePath(path);
 
 			SafeFileHandle fileHandle = NativeIO.CreateFileW(path, fileAccess, shareMode, IntPtr.Zero, fileOption, 0, IntPtr.Zero);
 
@@ -358,6 +353,26 @@ namespace Loxifi.FastIO
 					yield return fd;
 				}
 			}
+		}
+
+		/// <summary>
+		/// If the path is >= 260 characters, this method escapes it. If not, the result is returned as-is
+		/// </summary>
+		/// <param name="path"></param>
+		/// <returns></returns>
+		public static string GetLongSafePath(string path)
+		{
+			if(path.Length < 260)
+			{
+				return path;
+			}
+
+			if (path.StartsWith("\\\\"))
+			{
+				return $"\\\\?\\UNC\\{path[2..]}";
+			}
+
+			return $"\\\\?\\{path}";
 		}
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]

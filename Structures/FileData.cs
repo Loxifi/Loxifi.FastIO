@@ -60,22 +60,6 @@ namespace Loxifi.FastIO.Structures
 		public string DirectoryName => this.FullName[..this.FullName.LastIndexOf('\\')];
 
 		/// <summary>
-		/// FullName property in a format compatible with lengths > 260 characters
-		/// </summary>
-		public string FullNameLong
-		{
-			get
-			{
-				if (this.FullName.Length < 260 || this.FullName.StartsWith(@"\\"))
-				{
-					return this.FullName;
-				}
-
-				return $@"\\?\{this.FullName}";
-			}
-		}
-
-		/// <summary>
 		/// True if this struct has been populated
 		/// </summary>
 		public bool HasValue => !string.IsNullOrWhiteSpace(this.FullName);
