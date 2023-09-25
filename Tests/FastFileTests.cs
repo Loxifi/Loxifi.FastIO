@@ -10,7 +10,7 @@ namespace Loxifi.FastIO.Tests
 		[TestMethod]
 		public void TestOpen()
 		{
-			string uri = "\\\\192.168.0.218\\Mirror\\3TB\\Downloaded from LeakedBB.com -- 2015 oct-dec GoneWild archive web rip 10k images\\My Web Sites\\rhymenoserus\\[ LeakedBB.com_Repost_4 ]\\hts-cache\\new\\http_\\www.xxxxselfie.com\\photo\\who-wants-to-titi-fuck-me-and-leave-a-mark-like-this.html";
+			string uri = "";
 
 			using Stream stream = FileSystemService.Open(uri, FileAccess.Read);
 		}
