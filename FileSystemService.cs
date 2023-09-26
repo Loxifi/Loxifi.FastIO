@@ -5,6 +5,7 @@ using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace Loxifi.FastIO
 {
@@ -28,17 +29,17 @@ namespace Loxifi.FastIO
 		/// <param name="recursive"></param>
 		/// <param name="multithreaded"></param>
 		/// <returns></returns>
-		public static IEnumerable<FileData> EnumerateFiles(DirectoryData directoryData, bool recursive = false, bool multithreaded = false)
+		public static IEnumerable<FileData> EnumerateFiles(string path, bool recursive = false, int threads = 10, Action<DirectoryData>? onDirectory = null)
 		{
 			IEnumerable<FileData> files;
 
-			if (multithreaded)
+			if (recursive)
 			{
-				files = EnumerateFilesMultiThread(directoryData, recursive);
+				files = RecursiveEnumerateFiles(new DirectoryData(path), threads, onDirectory);
 			}
 			else
 			{
-				files = EnumerateFilesSingleThread(directoryData, recursive);
+				files = NonRecursiveEnumerateFiles(new DirectoryData(path), onDirectory);
 			}
 
 			return files;
@@ -48,71 +49,172 @@ namespace Loxifi.FastIO
 		/// Executes a multithreaded enumeration and invokes the provided actions when a file or directory is discovered
 		/// </summary>
 		/// <param name="directoryData"></param>
-		/// <param name="onFile"></param>
-		/// <param name="recursive"></param>
 		/// <param name="onDirectory"></param>
-		public static void EnumerateFiles(DirectoryData directoryData, Action<FileData> onFile, bool recursive = false, Action<DirectoryData>? onDirectory = null)
+		public static IEnumerable<FileData> RecursiveEnumerateFiles(DirectoryData directoryData, int threads = 10, Action<DirectoryData>? onDirectory = null)
 		{
-			List<DirectoryData> directoryDatas = new();
+			int activeThreads = 0;
 
-			void FoundDir(DirectoryData dd)
+			Queue<DirectoryData> directories = new();
+
+			BlockingCollection<FileData> files = new();
+
+			directories.Enqueue(directoryData);
+
+			SemaphoreSlim semaphoreSlim = new(1);
+
+			object syncLock = new();
+
+			bool completed = false;
+
+			List<Thread> backgroundThreads = new();
+
+			for(int  i = 0; i < threads; i++)
 			{
-				if (recursive)
+				Thread thisThread = new(() =>
 				{
-					directoryDatas.Add(dd);
-				}
+					do
+					{
+						DirectoryData parent;
 
-				onDirectory?.Invoke(dd);
+						semaphoreSlim.Wait();
+
+						if (completed)
+						{
+							return;
+						}
+
+						lock (syncLock)
+						{
+							parent = directories.Dequeue();
+							activeThreads++;
+						}
+
+						IntPtr hFile = IntPtr.Zero;
+
+						try
+						{
+							hFile = NativeIO.FindFirstFileW(parent.FullName + "\\" + "*", out WIN32_FIND_DATA fd);
+
+							// If we encounter an error, or there are no files/directories, we return no entries.
+							if (hFile.ToInt64() != -1)
+							{
+
+								do
+								{
+									if (fd.cFileName is not ("." or ".."))
+									{
+										// If a directory (and not a Reparse Point), and the name is not "." or ".." which exist as concepts in the file system,
+										// count the directory and add it to a list so we can iterate over it in parallel later on to maximize performance.
+										if (IsRealDirectory(fd))
+										{
+											DirectoryData child = new(Path.Combine(parent.FullName, fd.cFileName));
+											onDirectory?.Invoke(child);
+
+											lock (syncLock)
+											{
+												directories.Enqueue(child);
+												semaphoreSlim.Release();
+											}
+										}
+										// Otherwise, if this is a file ("archive"), increment the file count.
+										else if (IsFile(fd))
+										{
+											files.Add(new(
+													fd.dwFileAttributes,
+													Path.Combine(parent.FullName, fd.cFileName),
+													DateTime.FromFileTimeUtc((fd.ftLastWriteTime.dwHighDateTime << 32) | (fd.ftLastWriteTime.dwLowDateTime & 0xFFFFFFFF)),
+													(fd.nFileSizeHigh << 32) | fd.nFileSizeLow
+											));
+										}
+									}
+								}
+								while (NativeIO.FindNextFileW(hFile, out fd));
+							}
+						}
+						finally
+						{
+							if (hFile.ToInt64() != 0)
+							{
+								_ = NativeIO.FindClose(hFile);
+							}
+
+							lock (syncLock)
+							{
+								activeThreads--;
+
+								if (activeThreads == 0 && directories.Count == 0)
+								{
+									completed = true;
+									semaphoreSlim.Release(threads);
+									files.CompleteAdding();
+								}
+							}
+						}
+					} while (true);
+
+				});
+
+				thisThread.Start();
+
+				backgroundThreads.Add(thisThread);
 			}
 
-			foreach (FileData fileData in Enumerate(directoryData, FoundDir))
+			foreach (FileData fd in files.GetConsumingEnumerable())
 			{
-				onFile.Invoke(fileData);
+				yield return fd;
 			}
-
-			if (!recursive)
-			{
-				return;
-			}
-
-			_ = Parallel.ForEach(directoryDatas, dd => EnumerateFiles(dd, onFile, recursive, onDirectory));
 		}
 
 		/// <summary>
 		/// Executes a multithreaded enumeration and invokes the provided actions when a file or directory is discovered
 		/// </summary>
 		/// <param name="directoryData"></param>
-		/// <param name="onFile"></param>
-		/// <param name="recursive"></param>
 		/// <param name="onDirectory"></param>
-		public static async Task EnumerateFilesAsync(DirectoryData directoryData, Func<FileData, Task> onFile, bool recursive = false, Func<DirectoryData, Task>? onDirectory = null)
+		public static IEnumerable<FileData> NonRecursiveEnumerateFiles(DirectoryData directoryData, Action<DirectoryData>? onDirectory = null)
 		{
-			List<DirectoryData> directoryDatas = new();
+			IntPtr hFile = IntPtr.Zero;
 
-			async Task FoundDir(DirectoryData dd)
+			try
 			{
-				if (recursive)
+				hFile = NativeIO.FindFirstFileW(directoryData.FullName + "\\" + "*", out WIN32_FIND_DATA fd);
+
+				// If we encounter an error, or there are no files/directories, we return no entries.
+				if (hFile.ToInt64() != -1)
 				{
-					directoryDatas.Add(dd);
-				}
 
-				if (onDirectory is not null)
+					do
+					{
+						if (fd.cFileName is not ("." or ".."))
+						{
+							// If a directory (and not a Reparse Point), and the name is not "." or ".." which exist as concepts in the file system,
+							// count the directory and add it to a list so we can iterate over it in parallel later on to maximize performance.
+							if (IsRealDirectory(fd))
+							{
+								DirectoryData child = new(Path.Combine(directoryData.FullName, fd.cFileName));
+								onDirectory?.Invoke(child);
+							}
+							// Otherwise, if this is a file ("archive"), increment the file count.
+							else if (IsFile(fd))
+							{
+								yield return new(
+										fd.dwFileAttributes,
+										Path.Combine(directoryData.FullName, fd.cFileName),
+										DateTime.FromFileTimeUtc((fd.ftLastWriteTime.dwHighDateTime << 32) | (fd.ftLastWriteTime.dwLowDateTime & 0xFFFFFFFF)),
+										(fd.nFileSizeHigh << 32) | fd.nFileSizeLow
+								);
+							}
+						}
+					}
+					while (NativeIO.FindNextFileW(hFile, out fd));
+				}
+			}
+			finally
+			{
+				if (hFile.ToInt64() != 0)
 				{
-					await onDirectory.Invoke(dd);
+					_ = NativeIO.FindClose(hFile);
 				}
 			}
-
-			await foreach (FileData fileData in EnumerateAsync(directoryData, FoundDir))
-			{
-				await onFile.Invoke(fileData);
-			}
-
-			if (!recursive)
-			{
-				return;
-			}
-
-			_ = Parallel.ForEach(directoryDatas, async dd => await EnumerateFilesAsync(dd, onFile, recursive, onDirectory));
 		}
 
 		/// <summary>
@@ -163,195 +265,6 @@ namespace Loxifi.FastIO
 			if (string.IsNullOrWhiteSpace(data.FullName))
 			{
 				throw new ArgumentNullException("path", "The provided path is NULL or empty.");
-			}
-		}
-
-		private static async IAsyncEnumerable<FileData> EnumerateAsync(DirectoryData directory, Func<DirectoryData, Task>? onDirectory = null)
-		{
-			string path = directory.FullName;
-
-			if (string.IsNullOrWhiteSpace(path))
-			{
-				throw new ArgumentNullException("path", "The provided path is NULL or empty.");
-			}
-
-			// If the provided path doesn't end in a backslash, append one.
-			if (path.Last() != '\\')
-			{
-				path += '\\';
-			}
-
-			IntPtr hFile = IntPtr.Zero;
-
-			try
-			{
-				hFile = NativeIO.FindFirstFileW(path + "*", out WIN32_FIND_DATA fd);
-
-				// If we encounter an error, or there are no files/directories, we return no entries.
-				if (hFile.ToInt64() == -1)
-				{
-					yield break;
-				}
-
-				do
-				{
-					if (fd.cFileName is not ("." or ".."))
-					{
-						// If a directory (and not a Reparse Point), and the name is not "." or ".." which exist as concepts in the file system,
-						// count the directory and add it to a list so we can iterate over it in parallel later on to maximize performance.
-						if (IsRealDirectory(fd))
-						{
-							if (onDirectory != null)
-							{
-								await onDirectory.Invoke(new DirectoryData(Path.Combine(path, fd.cFileName)));
-							}
-						}
-						else if (IsFile(fd))
-						{
-							yield return new(
-									fd.dwFileAttributes,
-									Path.Combine(path, fd.cFileName),
-									DateTime.FromFileTimeUtc((fd.ftLastWriteTime.dwHighDateTime << 32) | (fd.ftLastWriteTime.dwLowDateTime & 0xFFFFFFFF)),
-									(fd.nFileSizeHigh << 32) | fd.nFileSizeLow
-								);
-						}
-					}
-				}
-				while (NativeIO.FindNextFileW(hFile, out fd));
-			}
-			finally
-			{
-				if (hFile.ToInt64() != 0)
-				{
-					_ = NativeIO.FindClose(hFile);
-				}
-			}
-		}
-
-		private static IEnumerable<FileData> Enumerate(DirectoryData directory, Action<DirectoryData>? onDirectory = null)
-		{
-			string path = directory.FullName;
-
-			if (string.IsNullOrWhiteSpace(path))
-			{
-				throw new ArgumentNullException("path", "The provided path is NULL or empty.");
-			}
-
-			ConcurrentBag<FileData> toReturn = new();
-
-			// If the provided path doesn't end in a backslash, append one.
-			if (path.Last() != '\\')
-			{
-				path += '\\';
-			}
-
-			IntPtr hFile = IntPtr.Zero;
-
-			try
-			{
-				hFile = NativeIO.FindFirstFileW(path + "*", out WIN32_FIND_DATA fd);
-
-				// If we encounter an error, or there are no files/directories, we return no entries.
-				if (hFile.ToInt64() == -1)
-				{
-					yield break;
-				}
-
-				do
-				{
-					if (fd.cFileName is not ("." or ".."))
-					{
-						// If a directory (and not a Reparse Point), and the name is not "." or ".." which exist as concepts in the file system,
-						// count the directory and add it to a list so we can iterate over it in parallel later on to maximize performance.
-						if (IsRealDirectory(fd))
-						{
-							onDirectory?.Invoke(new DirectoryData(Path.Combine(path, fd.cFileName)));
-						}
-						// Otherwise, if this is a file ("archive"), increment the file count.
-						else if (IsFile(fd))
-						{
-							yield return new(
-									fd.dwFileAttributes,
-									Path.Combine(path, fd.cFileName),
-									DateTime.FromFileTimeUtc((fd.ftLastWriteTime.dwHighDateTime << 32) | (fd.ftLastWriteTime.dwLowDateTime & 0xFFFFFFFF)),
-									(fd.nFileSizeHigh << 32) | fd.nFileSizeLow
-								);
-						}
-					}
-				}
-				while (NativeIO.FindNextFileW(hFile, out fd));
-			}
-			finally
-			{
-				if (hFile.ToInt64() != 0)
-				{
-					_ = NativeIO.FindClose(hFile);
-				}
-			}
-		}
-
-		/// <summary>
-		///
-		/// </summary>
-		/// <param name="directory"></param>
-		/// <returns></returns>
-		/// <exception cref="ArgumentNullException"></exception>
-		private static IEnumerable<FileData> EnumerateFilesMultiThread(DirectoryData directory, bool recursive)
-		{
-			ConcurrentBag<FileData> toReturn = new();
-			List<DirectoryData> directories = new();
-
-			foreach (FileData fd in Enumerate(directory, directories.Add))
-			{
-				toReturn.Add(fd);
-			}
-
-			//This is dumb since it never executes multithread but the code path
-			//should be dynamic and match the other sigs
-			if (!recursive)
-			{
-				return toReturn;
-			}
-
-			// Iterate over each discovered directory in parallel to maximize file/directory counting performance,
-			// calling itself recursively to traverse each directory completely.
-			_ = Parallel.ForEach(
-				directories,
-				directory =>
-				{
-					foreach (FileData fd in EnumerateFilesMultiThread(directory, recursive))
-					{
-						toReturn.Add(fd);
-					}
-				});
-
-			return toReturn;
-		}
-
-		/// <summary>
-		/// Fast enumerates the children of a provided directory
-		/// </summary>
-		/// <param name="directory"></param>
-		/// <param name="recursive"></param>
-		/// <returns></returns>
-		/// <exception cref="ArgumentNullException"></exception>
-		private static IEnumerable<FileData> EnumerateFilesSingleThread(DirectoryData directory, bool recursive = false)
-		{
-			List<DirectoryData> directoryDatas = new();
-
-			Action<DirectoryData>? addAction = recursive ? directoryDatas.Add : null;
-
-			foreach (FileData fd in Enumerate(directory, addAction))
-			{
-				yield return fd;
-			}
-
-			foreach (DirectoryData dd in directoryDatas)
-			{
-				foreach (FileData fd in EnumerateFilesSingleThread(dd, recursive))
-				{
-					yield return fd;
-				}
 			}
 		}
 
