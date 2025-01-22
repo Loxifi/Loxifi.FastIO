@@ -5,341 +5,468 @@ using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Threading;
 
 namespace Loxifi.FastIO
 {
-	/// <summary>
-	///
-	/// </summary>
-	public static class FileSystemService
-	{
-		//TODO: Async methods should be joined with sync
+    /// <summary>
+    ///
+    /// </summary>
+    public static class FileSystemService
+    {
+        private const string REGULAR_SHARE_PATH_PREFIX = @"\\";
 
-		private const string REGULAR_SHARE_PATH_PREFIX = @"\\";
+        private const string UNC_LOCAL_PATH_PREFIX = @"\\?\";
 
-		private const string UNC_LOCAL_PATH_PREFIX = @"\\?\";
+        private const string UNC_SHARE_PATH_PREFIX = @"\\?\UNC\";
 
-		private const string UNC_SHARE_PATH_PREFIX = @"\\?\UNC\";
+        /// <summary>
+        /// Enumerates directories in the given directory with the provided options
+        /// </summary>
+        /// <param name="directoryData"></param>
+        /// <param name="recursive"></param>
+        /// <param name="multithreaded"></param>
+        /// <returns></returns>
+        public static IEnumerable<DirectoryData> EnumerateDirectories(DirectoryData directoryData, bool recursive = false, bool multithreaded = false)
+        {
+            return !multithreaded
+                ? EnumerateDirectoriesSingleThread(directoryData, recursive)
+                : EnumerateDirectoriesMultiThread(directoryData, recursive);
+        }
 
-		/// <summary>
-		/// Enumerates files in the given directory with the provided options
-		/// </summary>
-		/// <param name="directoryData"></param>
-		/// <param name="recursive"></param>
-		/// <param name="multithreaded"></param>
-		/// <returns></returns>
-		public static IEnumerable<FileData> EnumerateFiles(string path, bool recursive = false, int threads = 10, Action<DirectoryData>? onDirectory = null)
-		{
-			IEnumerable<FileData> files;
+        /// <summary>
+        /// Enumerates files in the given directory with the provided options
+        /// </summary>
+        /// <param name="directoryData"></param>
+        /// <param name="recursive"></param>
+        /// <param name="multithreaded"></param>
+        /// <returns></returns>
+        public static IEnumerable<FileData> EnumerateFiles(DirectoryData directoryData, bool recursive = false, bool multithreaded = false)
+        {
+            return !multithreaded
+                ? EnumerateFilesSingleThread(directoryData, recursive)
+                : EnumerateFilesMultiThread(directoryData, recursive);
+        }
 
-			if (recursive)
-			{
-				files = RecursiveEnumerateFiles(new DirectoryData(path), threads, onDirectory);
-			}
-			else
-			{
-				files = NonRecursiveEnumerateFiles(new DirectoryData(path), onDirectory);
-			}
+        /// <summary>
+        /// Executes enumeration and invokes the provided actions when a file or directory is discovered
+        /// </summary>
+        /// <param name="directoryData"></param>
+        /// <param name="onFile"></param>
+        /// <param name="recursive"></param>
+        /// <param name="onDirectory"></param>
+        public static void EnumerateFiles(DirectoryData directoryData, Action<FileData> onFile, bool recursive = false, Action<DirectoryData>? onDirectory = null)
+        {
+            List<DirectoryData> directoryDatas = new();
 
-			return files;
-		}
+            foreach (FileData fileData in Enumerate(directoryData, FoundDir))
+            {
+                onFile(fileData);
+            }
 
-		/// <summary>
-		/// Executes a multithreaded enumeration and invokes the provided actions when a file or directory is discovered
-		/// </summary>
-		/// <param name="directoryData"></param>
-		/// <param name="onDirectory"></param>
-		public static IEnumerable<FileData> RecursiveEnumerateFiles(DirectoryData directoryData, int threads = 10, Action<DirectoryData>? onDirectory = null)
-		{
-			int activeThreads = 0;
+            if (recursive)
+            {
+                Parallel.ForEach(directoryDatas, dd => EnumerateFiles(dd, onFile, recursive, onDirectory));
+            }
 
-			Queue<DirectoryData> directories = new();
+            void FoundDir(DirectoryData dd)
+            {
+                if (recursive)
+                {
+                    directoryDatas.Add(dd);
+                }
 
-			BlockingCollection<FileData> files = new();
+                onDirectory?.Invoke(dd);
+            }
+        }
 
-			directories.Enqueue(directoryData);
+        /// <summary>
+        /// Executes enumeration and invokes the provided actions when a file or directory is discovered
+        /// </summary>
+        /// <param name="directoryData"></param>
+        /// <param name="onFile"></param>
+        /// <param name="recursive"></param>
+        /// <param name="onDirectory"></param>
+        public static async Task EnumerateFilesAsync(DirectoryData directoryData, Func<FileData, Task> onFile, bool recursive = false, Func<DirectoryData, Task>? onDirectory = null)
+        {
+            List<DirectoryData> directoryDatas = new();
 
-			SemaphoreSlim semaphoreSlim = new(1);
+            await foreach (FileData fileData in EnumerateAsync(directoryData, FoundDir))
+            {
+                await onFile(fileData);
+            }
 
-			object syncLock = new();
+            if (recursive)
+            {
+                Parallel.ForEach(directoryDatas, async dd => await EnumerateFilesAsync(dd, onFile, recursive, onDirectory));
+            }
 
-			bool completed = false;
+            async Task FoundDir(DirectoryData dd)
+            {
+                if (recursive)
+                {
+                    directoryDatas.Add(dd);
+                }
 
-			List<Thread> backgroundThreads = new();
+                if (onDirectory != null)
+                {
+                    await onDirectory(dd);
+                }
+            }
+        }
 
-			for(int  i = 0; i < threads; i++)
-			{
-				Thread thisThread = new(() =>
-				{
-					do
-					{
-						DirectoryData parent;
+        /// <summary>
+        /// Opens a <see cref="FileStream"/> for access at the given path. Ensure stream is correctly disposed.
+        /// </summary>
+        public static FileStream Open(FileData fileData, FileAccess fileAccess, FileMode fileOption = FileMode.Open, FileShare shareMode = FileShare.Read, int buffer = 0)
+        {
+            SafeFileHandle fileHandle = NativeIO.CreateFileW(GetLongSafePath(fileData.FullName), fileAccess, shareMode, IntPtr.Zero, fileOption, 0, IntPtr.Zero);
 
-						semaphoreSlim.Wait();
+            int win32Error = Marshal.GetLastWin32Error();
+            if (fileHandle.IsInvalid)
+            {
+                NativeExceptionMapping(fileData.FullName, win32Error);
+            }
 
-						if (completed)
-						{
-							return;
-						}
+            return buffer > 0 ? new FileStream(fileHandle, fileAccess, buffer) : new FileStream(fileHandle, fileAccess);
+        }
 
-						lock (syncLock)
-						{
-							parent = directories.Dequeue();
-							activeThreads++;
-						}
+        /// <summary>
+        /// Opens a <see cref="FileStream"/> for access at the given path. Ensure stream is correctly disposed.
+        /// </summary>
+        public static FileStream Open(string path, FileAccess fileAccess, FileMode fileOption = FileMode.Open, FileShare shareMode = FileShare.Read, int buffer = 0)
+        {
+            path = GetLongSafePath(path);
 
-						IntPtr hFile = IntPtr.Zero;
+            SafeFileHandle fileHandle = NativeIO.CreateFileW(path, fileAccess, shareMode, IntPtr.Zero, fileOption, 0, IntPtr.Zero);
 
-						try
-						{
-							hFile = NativeIO.FindFirstFileW(parent.FullName + "\\" + "*", out WIN32_FIND_DATA fd);
+            int win32Error = Marshal.GetLastWin32Error();
+            if (fileHandle.IsInvalid)
+            {
+                NativeExceptionMapping(path, win32Error);
+            }
 
-							// If we encounter an error, or there are no files/directories, we return no entries.
-							if (hFile.ToInt64() != -1)
-							{
+            return buffer > 0 ? new FileStream(fileHandle, fileAccess, buffer) : new FileStream(fileHandle, fileAccess);
+        }
 
-								do
-								{
-									if (fd.cFileName is not ("." or ".."))
-									{
-										// If a directory (and not a Reparse Point), and the name is not "." or ".." which exist as concepts in the file system,
-										// count the directory and add it to a list so we can iterate over it in parallel later on to maximize performance.
-										if (IsRealDirectory(fd))
-										{
-											DirectoryData child = new(Path.Combine(parent.FullName, fd.cFileName));
-											onDirectory?.Invoke(child);
+        /// <summary>
+        /// Converts an unc path to a share regular path
+        /// </summary>
+        /// <param name="uncSharePath">Unc Path</param>
+        /// <example>\\?\UNC\server\share >> \\server\share</example>
+        /// <returns>QuickIOShareInfo Regular Path</returns>
+        public static string ToShareRegularPath(string uncSharePath) => REGULAR_SHARE_PATH_PREFIX + uncSharePath[UNC_SHARE_PATH_PREFIX.Length..];
 
-											lock (syncLock)
-											{
-												directories.Enqueue(child);
-												semaphoreSlim.Release();
-											}
-										}
-										// Otherwise, if this is a file ("archive"), increment the file count.
-										else if (IsFile(fd))
-										{
-											files.Add(new(
-													fd.dwFileAttributes,
-													Path.Combine(parent.FullName, fd.cFileName),
-													DateTime.FromFileTimeUtc((fd.ftLastWriteTime.dwHighDateTime << 32) | (fd.ftLastWriteTime.dwLowDateTime & 0xFFFFFFFF)),
-													(fd.nFileSizeHigh << 32) | fd.nFileSizeLow
-											));
-										}
-									}
-								}
-								while (NativeIO.FindNextFileW(hFile, out fd));
-							}
-						}
-						finally
-						{
-							if (hFile.ToInt64() != 0)
-							{
-								_ = NativeIO.FindClose(hFile);
-							}
+        /// <summary>
+        /// If the path is >= 260 characters, this method escapes it. If not, the result is returned as-is
+        /// </summary>
+        public static string GetLongSafePath(string path)
+        {
+            if (path.Length < 260)
+            {
+                return path;
+            }
 
-							lock (syncLock)
-							{
-								activeThreads--;
+            if (path.StartsWith("\\\\"))
+            {
+                return $"\\\\?\\UNC\\{path[2..]}";
+            }
 
-								if (activeThreads == 0 && directories.Count == 0)
-								{
-									completed = true;
-									semaphoreSlim.Release(threads);
-									files.CompleteAdding();
-								}
-							}
-						}
-					} while (true);
+            return $"\\\\?\\{path}";
+        }
 
-				});
+        private static IEnumerable<FileData> Enumerate(DirectoryData directory, Action<DirectoryData>? onDirectory = null)
+        {
+            string path = directory.FullName;
 
-				thisThread.Start();
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                throw new ArgumentNullException("path", "The provided path is NULL or empty.");
+            }
 
-				backgroundThreads.Add(thisThread);
-			}
+            if (path[^1] != '\\')
+            {
+                path += "\\";
+            }
 
-			foreach (FileData fd in files.GetConsumingEnumerable())
-			{
-				yield return fd;
-			}
-		}
+            IntPtr hFile = IntPtr.Zero;
 
-		/// <summary>
-		/// Executes a multithreaded enumeration and invokes the provided actions when a file or directory is discovered
-		/// </summary>
-		/// <param name="directoryData"></param>
-		/// <param name="onDirectory"></param>
-		public static IEnumerable<FileData> NonRecursiveEnumerateFiles(DirectoryData directoryData, Action<DirectoryData>? onDirectory = null)
-		{
-			IntPtr hFile = IntPtr.Zero;
+            try
+            {
+                hFile = NativeIO.FindFirstFileW(path + "*", out WIN32_FIND_DATA fd);
 
-			try
-			{
-				hFile = NativeIO.FindFirstFileW(directoryData.FullName + "\\" + "*", out WIN32_FIND_DATA fd);
+                if (hFile.ToInt64() != -1)
+                {
+                    do
+                    {
+                        if (fd.cFileName is not ("." or ".."))
+                        {
+                            if (IsRealDirectory(fd))
+                            {
+                                onDirectory?.Invoke(new DirectoryData(Path.Combine(path, fd.cFileName)));
+                            }
+                            else if (IsFile(fd))
+                            {
+                                yield return new FileData(
+                                    fd.dwFileAttributes,
+                                    Path.Combine(path, fd.cFileName),
+                                    DateTime.FromFileTimeUtc((fd.ftLastWriteTime.dwHighDateTime << 32) | (fd.ftLastWriteTime.dwLowDateTime & 0xFFFFFFFF)),
+                                    (fd.nFileSizeHigh << 32) | fd.nFileSizeLow
+                                );
+                            }
+                        }
+                    }
+                    while (NativeIO.FindNextFileW(hFile, out fd));
+                }
+            }
+            finally
+            {
+                if (hFile.ToInt64() != 0)
+                {
+                    NativeIO.FindClose(hFile);
+                }
+            }
+        }
 
-				// If we encounter an error, or there are no files/directories, we return no entries.
-				if (hFile.ToInt64() != -1)
-				{
+        private static async IAsyncEnumerable<FileData> EnumerateAsync(DirectoryData directory, Func<DirectoryData, Task>? onDirectory = null)
+        {
+            string path = directory.FullName;
 
-					do
-					{
-						if (fd.cFileName is not ("." or ".."))
-						{
-							// If a directory (and not a Reparse Point), and the name is not "." or ".." which exist as concepts in the file system,
-							// count the directory and add it to a list so we can iterate over it in parallel later on to maximize performance.
-							if (IsRealDirectory(fd))
-							{
-								DirectoryData child = new(Path.Combine(directoryData.FullName, fd.cFileName));
-								onDirectory?.Invoke(child);
-							}
-							// Otherwise, if this is a file ("archive"), increment the file count.
-							else if (IsFile(fd))
-							{
-								yield return new(
-										fd.dwFileAttributes,
-										Path.Combine(directoryData.FullName, fd.cFileName),
-										DateTime.FromFileTimeUtc((fd.ftLastWriteTime.dwHighDateTime << 32) | (fd.ftLastWriteTime.dwLowDateTime & 0xFFFFFFFF)),
-										(fd.nFileSizeHigh << 32) | fd.nFileSizeLow
-								);
-							}
-						}
-					}
-					while (NativeIO.FindNextFileW(hFile, out fd));
-				}
-			}
-			finally
-			{
-				if (hFile.ToInt64() != 0)
-				{
-					_ = NativeIO.FindClose(hFile);
-				}
-			}
-		}
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                throw new ArgumentNullException("path", "The provided path is NULL or empty.");
+            }
 
-		/// <summary>
-		/// Opens a <see cref="FileStream"/> for access at the given path. Ensure stream is correctly disposed.
-		/// </summary>
-		public static FileStream Open(FileData fileData, FileAccess fileAccess, FileMode fileOption = FileMode.Open, FileShare shareMode = FileShare.Read, int buffer = 0)
-		{
-			SafeFileHandle fileHandle = NativeIO.CreateFileW(GetLongSafePath(fileData.FullName), fileAccess, shareMode, IntPtr.Zero, fileOption, 0, IntPtr.Zero);
+            if (path[^1] != '\\')
+            {
+                path += "\\";
+            }
 
-			int win32Error = Marshal.GetLastWin32Error();
-			if (fileHandle.IsInvalid)
-			{
-				NativeExceptionMapping(fileData.FullName, win32Error); // Throws an exception
-			}
+            IntPtr hFile = IntPtr.Zero;
 
-			return buffer > 0 ? new FileStream(fileHandle, fileAccess, buffer) : new FileStream(fileHandle, fileAccess);
-		}
+            try
+            {
+                hFile = NativeIO.FindFirstFileW(path + "*", out WIN32_FIND_DATA fd);
 
-		/// <summary>
-		/// Opens a <see cref="FileStream"/> for access at the given path. Ensure stream is correctly disposed.
-		/// </summary>
-		public static FileStream Open(string path, FileAccess fileAccess, FileMode fileOption = FileMode.Open, FileShare shareMode = FileShare.Read, int buffer = 0)
-		{
-			path = GetLongSafePath(path);
+                if (hFile.ToInt64() != -1)
+                {
+                    do
+                    {
+                        if (fd.cFileName is not ("." or ".."))
+                        {
+                            if (IsRealDirectory(fd))
+                            {
+                                if (onDirectory != null)
+                                {
+                                    await onDirectory(new DirectoryData(Path.Combine(path, fd.cFileName)));
+                                }
+                            }
+                            else if (IsFile(fd))
+                            {
+                                yield return new FileData(
+                                    fd.dwFileAttributes,
+                                    Path.Combine(path, fd.cFileName),
+                                    DateTime.FromFileTimeUtc((fd.ftLastWriteTime.dwHighDateTime << 32) | (fd.ftLastWriteTime.dwLowDateTime & 0xFFFFFFFF)),
+                                    (fd.nFileSizeHigh << 32) | fd.nFileSizeLow
+                                );
+                            }
+                        }
+                    }
+                    while (NativeIO.FindNextFileW(hFile, out fd));
+                }
+            }
+            finally
+            {
+                if (hFile.ToInt64() != 0)
+                {
+                    NativeIO.FindClose(hFile);
+                }
+            }
+        }
 
-			SafeFileHandle fileHandle = NativeIO.CreateFileW(path, fileAccess, shareMode, IntPtr.Zero, fileOption, 0, IntPtr.Zero);
+        private static IEnumerable<DirectoryData> EnumerateDir(DirectoryData directory)
+        {
+            string path = directory.FullName;
 
-			int win32Error = Marshal.GetLastWin32Error();
-			if (fileHandle.IsInvalid)
-			{
-				NativeExceptionMapping(path, win32Error); // Throws an exception
-			}
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                throw new ArgumentNullException("path", "The provided path is NULL or empty.");
+            }
 
-			return buffer > 0 ? new FileStream(fileHandle, fileAccess, buffer) : new FileStream(fileHandle, fileAccess);
-		}
+            if (path[^1] != '\\')
+            {
+                path += "\\";
+            }
 
-		/// <summary>
-		/// Converts an unc path to a share regular path
-		/// </summary>
-		/// <param name="uncSharePath">Unc Path</param>
-		/// <example>\\?\UNC\server\share >> \\server\share</example>
-		/// <returns>QuickIOShareInfo Regular Path</returns>
-		public static string ToShareRegularPath(string uncSharePath) => REGULAR_SHARE_PATH_PREFIX + uncSharePath[UNC_SHARE_PATH_PREFIX.Length..];
+            IntPtr hFile = IntPtr.Zero;
 
-		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		private static void Ensure(ref DirectoryData data)
-		{
-			if (string.IsNullOrWhiteSpace(data.FullName))
-			{
-				throw new ArgumentNullException("path", "The provided path is NULL or empty.");
-			}
-		}
+            try
+            {
+                hFile = NativeIO.FindFirstFileW(path + "*", out WIN32_FIND_DATA fd);
 
-		/// <summary>
-		/// If the path is >= 260 characters, this method escapes it. If not, the result is returned as-is
-		/// </summary>
-		/// <param name="path"></param>
-		/// <returns></returns>
-		public static string GetLongSafePath(string path)
-		{
-			if(path.Length < 260)
-			{
-				return path;
-			}
+                if (hFile.ToInt64() != -1)
+                {
+                    do
+                    {
+                        if (fd.cFileName is not ("." or "..") && IsRealDirectory(fd))
+                        {
+                            yield return new DirectoryData(Path.Combine(path, fd.cFileName));
+                        }
+                    }
+                    while (NativeIO.FindNextFileW(hFile, out fd));
+                }
+            }
+            finally
+            {
+                if (hFile.ToInt64() != 0)
+                {
+                    NativeIO.FindClose(hFile);
+                }
+            }
+        }
 
-			if (path.StartsWith("\\\\"))
-			{
-				return $"\\\\?\\UNC\\{path[2..]}";
-			}
+        private static IEnumerable<DirectoryData> EnumerateDirectoriesMultiThread(DirectoryData directory, bool recursive)
+        {
+            ConcurrentBag<DirectoryData> toReturn = new();
 
-			return $"\\\\?\\{path}";
-		}
+            foreach (DirectoryData directoryData in EnumerateDir(directory))
+            {
+                toReturn.Add(directoryData);
+            }
 
-		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		private static bool IsFile(WIN32_FIND_DATA fd) => (fd.dwFileAttributes & FileAttributes.Directory) == 0 && (fd.dwFileAttributes & FileAttributes.ReparsePoint) == 0;
+            if (!recursive)
+            {
+                return toReturn;
+            }
 
-		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		private static bool IsRealDirectory(WIN32_FIND_DATA fd) => (fd.dwFileAttributes & FileAttributes.Directory) != 0 && (fd.dwFileAttributes & FileAttributes.ReparsePoint) == 0;
+            Parallel.ForEach(toReturn, directory2 =>
+            {
+                foreach (DirectoryData directoryData in EnumerateDirectoriesMultiThread(directory2, recursive))
+                {
+                    toReturn.Add(directoryData);
+                }
+            });
 
-		private static void NativeExceptionMapping(string path, int errorCode)
-		{
-			if (errorCode == 0)
-			{
-				return;
-			}
+            return toReturn;
+        }
 
-			string affectedPath = ToRegularPath(path);
+        private static IEnumerable<DirectoryData> EnumerateDirectoriesSingleThread(DirectoryData directory, bool recursive = false)
+        {
+            List<DirectoryData> directoryDatas = new();
 
-			Win32Exception innerException = new(errorCode);
+            foreach (DirectoryData directoryData in EnumerateDir(directory))
+            {
+                yield return directoryData;
 
-			throw errorCode switch
-			{
-				2 => new FileNotFoundException("The system can not find the file specified", affectedPath),
-				3 => new FileNotFoundException("The system can not find the file specified", affectedPath),
-				5 => new UnauthorizedAccessException(affectedPath, innerException),
-				32 => new IOException("The file is in use by another process '{affectedPath}'", innerException),
-				_ => innerException,
-			};
-		}
+                if (recursive)
+                {
+                    directoryDatas.Add(directoryData);
+                }
+            }
 
-		/// <summary>
-		/// Converts an unc path to a local regular path
-		/// </summary>
-		/// <param name="uncLocalPath">Unc Path</param>
-		/// <example>\\?\C:\temp\file.txt >> C:\temp\file.txt</example>
-		/// <returns>Local Regular Path</returns>
-		private static string ToLocalRegularPath(string uncLocalPath) => uncLocalPath[UNC_LOCAL_PATH_PREFIX.Length..];
+            foreach (DirectoryData dd in directoryDatas)
+            {
+                foreach (DirectoryData directoryData in EnumerateDirectoriesSingleThread(dd, recursive))
+                {
+                    yield return directoryData;
+                }
+            }
+        }
 
-		/// <summary>
-		/// Converts unc path to regular path
-		/// </summary>
-		private static string ToRegularPath(string anyFullname)
-		{
-			// First: Check for UNC QuickIOShareInfo
-			if (anyFullname.StartsWith(UNC_SHARE_PATH_PREFIX, StringComparison.Ordinal))
-			{
-				return ToShareRegularPath(anyFullname); // Convert
-			}
+        private static IEnumerable<FileData> EnumerateFilesMultiThread(DirectoryData directory, bool recursive)
+        {
+            ConcurrentBag<FileData> toReturn = new();
+            List<DirectoryData> directories = new();
 
-			if (anyFullname.StartsWith(UNC_LOCAL_PATH_PREFIX, StringComparison.Ordinal))
-			{
-				return ToLocalRegularPath(anyFullname); // Convert
-			}
+            foreach (FileData fileData in Enumerate(directory, directories.Add))
+            {
+                toReturn.Add(fileData);
+            }
 
-			return anyFullname;
-		}
-	}
+            if (!recursive)
+            {
+                return toReturn;
+            }
+
+            Parallel.ForEach(directories, directory2 =>
+            {
+                foreach (FileData fileData in EnumerateFilesMultiThread(directory2, recursive))
+                {
+                    toReturn.Add(fileData);
+                }
+            });
+
+            return toReturn;
+        }
+
+        private static IEnumerable<FileData> EnumerateFilesSingleThread(DirectoryData directory, bool recursive = false)
+        {
+            List<DirectoryData> directoryDatas = new();
+            Action<DirectoryData>? addAction = recursive ? directoryDatas.Add : null;
+
+            foreach (FileData fileData in Enumerate(directory, addAction))
+            {
+                yield return fileData;
+            }
+
+            foreach (DirectoryData dd in directoryDatas)
+            {
+                foreach (FileData fileData in EnumerateFilesSingleThread(dd, recursive))
+                {
+                    yield return fileData;
+                }
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void Ensure(ref DirectoryData data)
+        {
+            if (string.IsNullOrWhiteSpace(data.FullName))
+            {
+                throw new ArgumentNullException("path", "The provided path is NULL or empty.");
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsFile(WIN32_FIND_DATA fd) => (fd.dwFileAttributes & FileAttributes.Directory) == 0 && (fd.dwFileAttributes & FileAttributes.ReparsePoint) == 0;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsRealDirectory(WIN32_FIND_DATA fd) => (fd.dwFileAttributes & FileAttributes.Directory) != 0 && (fd.dwFileAttributes & FileAttributes.ReparsePoint) == 0;
+
+        private static void NativeExceptionMapping(string path, int errorCode)
+        {
+            if (errorCode == 0)
+            {
+                return;
+            }
+
+            string affectedPath = ToRegularPath(path);
+            Win32Exception innerException = new(errorCode);
+
+            throw errorCode switch
+            {
+                2 => new FileNotFoundException("The system can not find the file specified", affectedPath),
+                3 => new FileNotFoundException("The system can not find the file specified", affectedPath),
+                5 => new UnauthorizedAccessException(affectedPath, innerException),
+                32 => new IOException("The file is in use by another process '{affectedPath}'", innerException),
+                _ => innerException,
+            };
+        }
+
+        private static string ToLocalRegularPath(string uncLocalPath) => uncLocalPath[UNC_LOCAL_PATH_PREFIX.Length..];
+
+        private static string ToRegularPath(string anyFullname)
+        {
+            if (anyFullname.StartsWith(UNC_SHARE_PATH_PREFIX, StringComparison.Ordinal))
+            {
+                return ToShareRegularPath(anyFullname);
+            }
+
+            if (anyFullname.StartsWith(UNC_LOCAL_PATH_PREFIX, StringComparison.Ordinal))
+            {
+                return ToLocalRegularPath(anyFullname);
+            }
+
+            return anyFullname;
+        }
+    }
 }
